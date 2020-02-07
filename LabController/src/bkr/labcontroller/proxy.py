@@ -187,9 +187,10 @@ class ConsoleLogHelper(object):
     """
     blocksize = 65536
 
-    def __init__(self, watchdog, proxy, panic):
+    def __init__(self, watchdog, proxy, panic, logfile_name=None):
         self.watchdog = watchdog
         self.proxy = proxy
+        self.logfilename = logfile_name if logfile_name is not None else "console.log"
         self.strip_ansi = re.compile("(\033\[[0-9;\?]*[ABCDHfsnuJKmhr])")
         ascii_control_chars = map(chr, range(0, 32) + [127])
         keep_chars = '\t\n'
@@ -232,7 +233,7 @@ class ConsoleLogHelper(object):
         try:
             log_file = self.proxy.log_storage.recipe(
                     str(self.watchdog['recipe_id']),
-                    'console.log', create=self.where == 0)
+                    self.logfile_name, create=self.where == 0)
             with log_file:
                 log_file.update_chunk(block, self.where)
         except (OSError, IOError), e:
@@ -242,11 +243,43 @@ class ConsoleLogHelper(object):
                 raise
 
 
+class ConsoleWatchDirectory(object):
+    """ Monitor a directory for log files and upload them """
+    def __init__(self, logdir, watchdog, proxy, panic):
+        self.logdir = os.path.abspath(logdir)
+        self.watchdog = watchdog
+        self.proxy = proxy
+        self.panic = panic
+
+        self.logfiles = {}
+        for filename in sorted(os.listdir(self.logdir)):
+            full_path = os.path.join(self.logdir, filename)
+            self.logfiles[full_path] = ConsoleWatchFile(
+                log=full_path, watchdog=self.watchdog, proxy=self.proxy,
+                panic=self.panic, logfile_name="console-{}.log".format(filename))
+
+    def update(self):
+        # Check for any new log files
+        for filename in sorted(os.listdir(self.logdir)):
+            full_path = os.path.join(self.logdir, filename)
+            if full_path not in self.logfiles:
+                self.logfiles[full_path] = ConsoleWatchFile(
+                    log=full_path, watchdog=self.watchdog, proxy=self.proxy,
+                    panic=self.panic, logfile_name="console-{}.log".format(filename))
+
+        # Update all of our log files. If any had updated data return True
+        updated = False
+        for console_log in self.logfiles.values():
+            updated |= console_log.update()
+        return updated
+
+
 class ConsoleWatchFile(ConsoleLogHelper):
 
-    def __init__(self, log, watchdog, proxy, panic):
+    def __init__(self, log, watchdog, proxy, panic, logfile_name=None):
         self.log = log
-        super(ConsoleWatchFile, self).__init__(watchdog, proxy, panic)
+        super(ConsoleWatchFile, self).__init__(
+            watchdog, proxy, panic, logfile_name=logfile_name)
 
     def update(self):
         """
@@ -498,8 +531,12 @@ class Monitor(ProxyHelper):
         else:
             console_path = '%s/%s' % (self.conf['CONSOLE_LOGS'], self.watchdog['system'])
             logger.info('Watching console log file %s for recipe %s', console_path, watchdog['recipe_id'])
-            self.console_watch = ConsoleWatchFile(console_path,
-                    self.watchdog, self, self.conf["PANIC_REGEX"])
+            if os.path.isdir(console_path):
+                self.console_watch = ConsoleWatchDirectory(console_path,
+                        self.watchdog, self, self.conf["PANIC_REGEX"])
+            else:
+                self.console_watch = ConsoleWatchFile(console_path,
+                        self.watchdog, self, self.conf["PANIC_REGEX"])
 
     def run(self):
         """ check the logs for new data to upload/or cp
