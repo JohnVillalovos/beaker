@@ -206,6 +206,14 @@ def build_power_env(command):
 
 def handle_clear_logs(conf, command):
     console_log = os.path.join(conf['CONSOLE_LOGS'], command['fqdn'])
+    if os.path.isdir(console_log):
+        for filename in sorted(os.listdir(console_log)):
+            full_path = os.path.join(console_log, filename)
+            truncate_logfile(full_path)
+    else:
+        truncate_logfile(console_log)
+
+def truncate_logfile(console_log):
     logger.debug('Truncating console log %s', console_log)
     try:
         f = open(console_log, 'r+')
@@ -214,6 +222,7 @@ def handle_clear_logs(conf, command):
             raise
     else:
         f.truncate()
+
 
 def handle_configure_netboot(command):
     netboot.configure_all(command['fqdn'],
